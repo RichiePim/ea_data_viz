@@ -10,6 +10,9 @@ from utils.subtitle import get_instructions
 from utils.subtitle import get_data_source
 from utils.plots.scatter import Scatter
 from utils.plots.line import Line
+import requests
+from io import StringIO
+from utils.get_data.open_phil import download_grants, process_grants, save_grants
 
 op_grants = None
 def get_op_grants():
@@ -17,65 +20,38 @@ def get_op_grants():
     if type(op_grants) != type(None):
         return op_grants
 
-    op_grants = pd.read_csv('./assets/data/openphil_grants.csv')
-    op_grants['Amount'] = op_grants['Amount'].apply(
-        lambda x: int(x[1:].replace(',','')) if type(x)==str else x
-    )
-    op_grants = op_grants.dropna()
-    op_grants['Focus Area'] = op_grants['Focus Area'].apply(lambda x: x.replace('Artificial Intelligence', 'AI'))
-    op_grants = op_grants[::-1]
+    try:
+        # Try to get fresh data from the API and save it
+        if save_grants():  # This will download, save, and return True if successful
+            op_grants = pd.read_csv('./assets/data/openphil_grants.csv')
+            op_grants = process_grants(op_grants)
+            if op_grants is not None:
+                return op_grants
 
-    def normalize_orgname(orgname):
-        if type(orgname) == str:
-            orgname = orgname.strip()
-        if orgname == 'Hellen Keller International':
-            orgname = 'Helen Keller International'
-        if orgname == 'Alliance for Safety and Justice':
-            orgname = 'Alliance for Safety and Justice Action Fund'
-        return orgname
-    op_grants['Organization Name'] = op_grants['Organization Name'].apply(normalize_orgname)
-
-    # for finding number of grants
-    op_grants['grants'] = 1
-
-    op_grants['Date'] = pd.to_datetime(op_grants['Date'], format='%m/%Y')
-    op_grants = op_grants.sort_values(by='Date', ascending=False)
-    op_grants['Date_readable'] = op_grants['Date'].dt.strftime('%B %Y')
-
-    # hovertext
-    def hover(row):
-        grant = row['Grant']
-        org = row['Organization Name']
-        area = row['Focus Area']
-        date = row['Date_readable']
-        amount = row['Amount']
-        return f'<b>{grant}</b><br>Date: {date}<br>Organization: {org}<br>Amount: ${amount:,.0f}'
-    op_grants['hover'] = op_grants.apply(hover, axis=1)
-
-    return op_grants
+        # Fallback to local file if API fails
+        print("Falling back to local file...")
+        op_grants = pd.read_csv('./assets/data/openphil_grants.csv')
+        op_grants = process_grants(op_grants)
+        
+        return op_grants
+    except Exception as e:
+        print(f"Error loading Open Philanthropy data: {e}")
+        return None
 
 
 def org_bar_chart(op_grants):
-
-    op_orgs = op_grants.groupby(by='Organization Name', as_index=False).sum()
+    # Only aggregate numeric columns
+    numeric_cols = op_grants.select_dtypes(include=[np.number]).columns
+    op_orgs = op_grants.groupby(by='Organization Name')[numeric_cols].sum().reset_index()
     op_orgs = op_orgs.sort_values(by='Amount')
     op_orgs['x'] = op_orgs['Organization Name']
-    # op_orgs['x'] = op_orgs['x'].apply(lambda x: x if len(x) < 30 else x[:27]+'...')
     op_orgs['y'] = op_orgs['Amount']
     op_orgs['text'] = op_orgs['Amount'].apply(lambda x: f'${x:,.0f}')
-
-    # Some organization names get truncated to the same value.
-    # This prevents that:
-    for val in op_orgs['x'].unique():
-        val_df = op_orgs[ op_orgs['x']==val ]
-        for i in range(1, len(val_df)):
-            index = val_df.iloc[i].name
-            op_orgs.loc[index, 'x'] = op_orgs.loc[index, 'x'][:-3-i] + '...'
 
     def hover(row):
         org = row['Organization Name']
         amount = row['text']
-        grants = row['grants']
+        grants = row['grants'] if 'grants' in row else 'N/A'
         return f'<b>{org}</b><br>{grants} grants<br>{amount} total'
     op_orgs['hover'] = op_orgs.apply(hover, axis=1)
 
@@ -85,8 +61,9 @@ def org_bar_chart(op_grants):
 
 
 def cause_bar_chart(op_grants):
-
-    op_causes = op_grants.groupby(by='Focus Area', as_index=False).sum()
+    # Only aggregate numeric columns
+    numeric_cols = op_grants.select_dtypes(include=[np.number]).columns
+    op_causes = op_grants.groupby(by='Focus Area')[numeric_cols].sum().reset_index()
     op_causes = op_causes.sort_values(by='Amount')
     op_causes['x'] = op_causes['Focus Area']
     op_causes['y'] = op_causes['Amount']
@@ -95,7 +72,7 @@ def cause_bar_chart(op_grants):
     def hover(row):
         area = row['Focus Area']
         amount = row['text']
-        grants = row['grants']
+        grants = row['grants'] if 'grants' in row else 'N/A'
         return f'<b>{area}</b><br>{grants} grants<br>{amount} total'
     op_causes['hover'] = op_causes.apply(hover, axis=1)
 

@@ -22,7 +22,7 @@ data_source_details = {
     'open_phil': dict(
         name='openphilanthropy.org',
         url='https://www.openphilanthropy.org/giving/grants',
-        download_url='https://www.openphilanthropy.org/giving/grants/spreadsheet',
+        download_url='https://www.openphilanthropy.org/wp-admin/admin-ajax.php?action=generate_grants&nonce=76f5319a09',
     ),
 
     'funds_payout': dict(

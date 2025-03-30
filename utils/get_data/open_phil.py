@@ -1,42 +1,103 @@
 import requests
 import os
+import pandas as pd
+from datetime import datetime
+from io import StringIO
+from bs4 import BeautifulSoup
 
 def download_grants():
-    openphil_url = 'https://www.openphilanthropy.org/giving/grants/spreadsheet'
+    # IMPORTANT: This URL may need to be updated manually if Open Philanthropy changes their data access method
+    # The nonce in the URL may expire, requiring a new one to be obtained from their website
+    openphil_url = 'https://www.openphilanthropy.org/wp-admin/admin-ajax.php?action=generate_grants&nonce=76f5319a09'
     print('Downloading Open Philanthropy grants...')
-    return requests.get(openphil_url, headers={'User-Agent': ''}).text
+    try:
+        # Set up headers to mimic a browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/csv,application/json',
+            'Accept-Language': 'en-US,en;q=0.9'
+        }
+        
+        # Download the CSV file
+        response = requests.get(openphil_url, headers=headers)
+        response.raise_for_status()
+        
+        # Return the CSV content
+        return response.text
+        
+    except Exception as e:
+        print(f"Error downloading grants: {e}")
+        print("Note: The URL may need to be updated with a new nonce from Open Philanthropy's website")
+        return None
 
 def save_grants():
-
-    data_dir = os.path.abspath('./assets/data/open_philanthropy/')
+    data_dir = os.path.abspath('./assets/data/')
     if not os.path.exists(data_dir):
-        os.path.makedirs(data_dir)
+        os.makedirs(data_dir)
 
     grants_raw = download_grants()
-    print('latest OP grant: ', new_op_data.split('\n')[1])
-    grants_path = os.path.join(data_dir, 'open_philanthropy_grants.csv')
-    with open(grants_path, 'w') as f:
-        f.write(grants_raw)
+    if grants_raw is None:
+        print("Failed to download grants data")
+        return False
+
+    try:
+        # Parse the CSV data
+        df = pd.read_csv(StringIO(grants_raw))
+        print(f'Latest OP grant date: {df["Date"].max() if "Date" in df.columns else "Unknown"}')
+        
+        # Save to CSV
+        grants_path = os.path.join(data_dir, 'openphil_grants.csv')
+        df.to_csv(grants_path, index=False)
+        print(f"Successfully saved grants data to {grants_path}")
+        return True
+    except Exception as e:
+        print(f"Error processing grants data: {e}")
+        return False
 
 def process_grants(grants_df):
+    if grants_df is None or grants_df.empty:
+        return None
 
-    grants_df['Amount'] = grants_df['Amount'].apply(
-        lambda x: int(x[1:].replace(',','')) if type(x)==str else x
-    )
+    try:
+        # Clean amount column
+        grants_df['Amount'] = grants_df['Amount'].apply(
+            lambda x: int(str(x).replace('$', '').replace(',', '')) if pd.notnull(x) else 0
+        )
 
-    def normalize_orgname(orgname):
-        if type(orgname) == str:
-            orgname = orgname.strip()
-        if orgname == 'Hellen Keller International':
-            orgname = 'Helen Keller International'
-        if orgname == 'Alliance for Safety and Justice':
-            orgname = 'Alliance for Safety and Justice Action Fund'
-        return orgname
-    op_grants['Organization Name'] = op_grants['Organization Name'].apply(normalize_orgname)
+        # Normalize organization names
+        def normalize_orgname(orgname):
+            if pd.isnull(orgname):
+                return ''
+            orgname = str(orgname).strip()
+            if orgname == 'Hellen Keller International':
+                orgname = 'Helen Keller International'
+            if orgname == 'Alliance for Safety and Justice':
+                orgname = 'Alliance for Safety and Justice Action Fund'
+            return orgname
+        grants_df['Organization Name'] = grants_df['Organization Name'].apply(normalize_orgname)
 
-    op_grants['Date'] = pd.to_datetime(op_grants['Date'], format='%m/%Y')
-    op_grants = op_grants.sort_values(by='Date', ascending=False)
-    op_grants['Date_readable'] = op_grants['Date'].dt.strftime('%B %Y')
+        # Process dates
+        grants_df['Date'] = pd.to_datetime(grants_df['Date'], format='%B %Y')
+        grants_df = grants_df.sort_values(by='Date', ascending=False)
+        grants_df['Date_readable'] = grants_df['Date'].dt.strftime('%B %Y')
+
+        # Add hover text
+        def hover(row):
+            grant = row['Grant']
+            org = row['Organization Name']
+            area = row['Focus Area']
+            date = row['Date_readable']
+            amount = row['Amount']
+            return f'<b>{grant}</b><br>Date: {date}<br>Organization: {org}<br>Amount: ${amount:,.0f}'
+        grants_df['hover'] = grants_df.apply(hover, axis=1)
+
+        # Add grants count
+        grants_df['grants'] = 1
+
+        return grants_df
+    except Exception as e:
+        print(f"Error processing grants: {e}")
+        return None
 
 def group_by_month(grants_df):
 
